@@ -1,4 +1,5 @@
 # Spider modal analysis with dolfinx_mpc
+<img width="600" alt="spider 0993" src="https://github.com/user-attachments/assets/e42246f2-6323-4982-8321-6ca0648b6783" />
 
 Modal analysis of a pin-jointed spider (17 parts, 16 pins, 8 feet) using the RBE2, RBE3 and spring features of [dolfinx_mpc](https://github.com/jorgensd/dolfinx_mpc).
 
