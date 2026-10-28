@@ -30,6 +30,14 @@ def _pack(array, dtype) -> str:
     return base64.b64encode(gzip.compress(raw)).decode("ascii")
 
 
+def _vec3(values):
+    """VTK vectors have three components: pad 2D vectors, such as DOLFINx makes in 2D, with a zero."""
+    values = np.asarray(values)
+    if values.ndim == 2 and values.shape[1] == 2:
+        values = np.c_[values, np.zeros(len(values))]
+    return values
+
+
 def _cmap(name: str, n: int = 16) -> list:
     rgba = matplotlib.colormaps[name](np.linspace(0.0, 1.0, n))
     return [[float(t), *map(float, c[:3])] for t, c in zip(np.linspace(0, 1, n), rgba)]
@@ -87,11 +95,8 @@ def scene_data(
     arrays, colors, warps = [], [], [{"label": "None", "expr": "coords", "scale": 0}]
     diag = float(np.linalg.norm(np.ptp(grid.points, axis=0)))
     for k, name in enumerate(grid.point_data.keys()):
-        values = np.asarray(grid.point_data[name], dtype=float)
+        values = _vec3(np.asarray(grid.point_data[name], dtype=float))
         ncomp = 1 if values.ndim == 1 else values.shape[1]
-        if ncomp == 2:  # DOLFINx 2D vectors: pad to 3 components for VTK
-            values = np.c_[values, np.zeros(len(values))]
-            ncomp = 3
         vid = f"a{k}"
         arrays.append({"id": vid, "name": name, "ncomp": ncomp})
         if ncomp == 1:
@@ -102,7 +107,7 @@ def scene_data(
             warps.append(
                 {
                     "label": f"{name} (normal to plane)",
-                    "expr": f"coords + F*{vid}*kHat",
+                    "expr": f"coords + {{F}}*{vid}*kHat",
                     "scale": 0.15 * diag / peak,
                 }
             )
@@ -126,13 +131,13 @@ def scene_data(
             warps.append(
                 {
                     "label": f"by {name}",
-                    "expr": f"coords + F*{vid}",
+                    "expr": f"coords + {{F}}*{vid}",
                     "scale": 0.1 * diag / (mag.max() or 1.0),
                 }
             )
 
     def point_arrays(ds):
-        return {a["name"]: _pack(ds.point_data[a["name"]], np.float32) for a in arrays}
+        return {a["name"]: _pack(_vec3(ds.point_data[a["name"]]), np.float32) for a in arrays}
 
     tris = surface.regular_faces
     lines = edges.lines.reshape(-1, 3)[:, 1:]  # every edge is a two-point line
@@ -149,7 +154,7 @@ def scene_data(
         segments = spider.lines.reshape(-1, 3)[:, 1:]  # every connection is a two-point line
         zeros = lambda a: np.zeros((spider.n_points, a["ncomp"]))
         padded = {
-            a["name"]: np.asarray(spider.point_data[a["name"]])
+            a["name"]: _vec3(spider.point_data[a["name"]])
             if a["name"] in spider.point_data
             else zeros(a)
             for a in arrays
@@ -201,16 +206,23 @@ JS_LIB = r"""
       document.head.appendChild(s);
     });
   }
-  // Download the bundle and check its hash. That needs a secure context (https, localhost, file): on a page
-  // served over plain http the bundle is loaded unchecked, from the same pinned commit.
+  // Download the bundle and check its hash, so that WebAssembly from a third party only runs if it is the pinned build.
+  // Hashing needs a secure context (https, localhost or a local file): on a page served over plain http the view
+  // does not start, instead of running the bundle unchecked.
   async function verifiedBundle() {
-    if (!window.crypto?.subtle) return BUNDLE;
+    if (!window.crypto?.subtle) throw new Error("the VTK.wasm bundle can only be checked on a secure page (https, localhost or a local file)");
     const response = await fetch(BUNDLE);
     if (!response.ok) throw new Error("Could not load " + BUNDLE);
     const bytes = await response.arrayBuffer();
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-384", bytes));
     if (btoa(String.fromCharCode(...digest)) !== BUNDLE_HASH) throw new Error("The VTK.wasm bundle does not match its hash");
     return URL.createObjectURL(new Blob([bytes], { type: "application/gzip" }));
+  }
+  const escapeHtml = (t) => String(t).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  // The range of a colouring, for the colour map and the sliders: a constant array has an empty range, so it gets a width
+  function colorRange(col) {
+    const [lo, hi] = col.range;
+    return hi > lo ? [lo, hi] : [lo, lo + (Math.abs(lo) || 1)];
   }
   function getRuntime() {
     runtime ??= (async () => {
@@ -327,9 +339,11 @@ JS_LIB = r"""
  
     async function apply(s) {
       const w = data.warps[s.warp];
-      // "F" in the expression is a placeholder for the scale of the warp: the scale from the data, times the slider,
-      // times the phase of the animation. The expressions are made in scene_data, which has no other capital F.
-      const fn = w.expr.replace("F", String(w.scale * s.warpFactor * s.phase));
+      // "{F}" in the expression is a placeholder for the scale of the warp: the scale from the data, times the slider,
+      // times the phase of the animation. It is written out in plain decimals and in parentheses, as the parser of the
+      // calculator has to read it, also when it is negative or tiny.
+      const factor = w.scale * s.warpFactor * s.phase;
+      const fn = w.expr.replaceAll("{F}", `(${(Number.isFinite(factor) ? factor : 0).toFixed(9)})`);
       await warp.setFunction(fn); await edgeWarp.setFunction(fn);
       if (spiderWarp) {
         await spiderWarp.setFunction(fn);
@@ -359,12 +373,13 @@ JS_LIB = r"""
       await mapper.setInputConnection(port);
       await edgeMapper.setInputConnection(edgePort);
  
-      const [lo, hi] = col.range;
+      const [lo, hi] = colorRange(col);
       await lut.removeAllPoints();
       for (const [t, r, g, bl] of data.cmap) await lut.addRGBPoint(lo + t * (hi - lo), r, g, bl);
       await mapper.setScalarRange(lo, hi);
-      const pad = (hi - lo) / (2 * s.contours);
-      await contour.generateValues(s.contours, [lo + pad, hi - pad]);
+      const levels = Math.max(1, Math.round(s.contours) || 1);  // an emptied field reads as 0
+      const pad = (hi - lo) / (2 * levels);
+      await contour.generateValues(levels, [lo + pad, hi - pad]);
  
       await contourActor.setVisibility(s.showContours ? 1 : 0);
       await edgeActor.setVisibility(s.showEdges ? 1 : 0);
@@ -385,7 +400,7 @@ JS_LIB = r"""
  
   function controls(data, state, onChange) {
     const frames = data.frames || 40;
-    const opts = (list) => list.map((o, i) => `<option value="${i}">${o.label}</option>`).join("");
+    const opts = (list) => list.map((o, i) => `<option value="${i}">${escapeHtml(o.label)}</option>`).join("");
     const panel = document.createElement("div");
     panel.className = "vwd-controls";
     panel.innerHTML = `
@@ -427,7 +442,7 @@ JS_LIB = r"""
         : `${data.warps[state.warp].label} · cos(2π·${state.frame}/${frames}) = ${(phase >= 0 ? "+" : "") + phase.toFixed(2)}`;
     }
     function syncRange() {
-      const [lo, hi] = data.colors[state.color].range;
+      const [lo, hi] = colorRange(data.colors[state.color]);
       for (const k of ["rangeMin", "rangeMax"]) {
         const el = panel.querySelector(`[data-k=${k}]`);
         el.min = lo; el.max = hi; el.step = (hi - lo) / 200;
@@ -438,7 +453,8 @@ JS_LIB = r"""
       panel.querySelector("[data-k=rangeMax]").value = state.rangeMax;
       panel.querySelector("[data-o=range]").textContent = `${fmt(state.rangeMin)} to ${fmt(state.rangeMax)}`;
       const [l, h] = legend.querySelectorAll("span");
-      l.textContent = fmt(lo); h.textContent = fmt(hi);
+      const [first, last] = data.colors[state.color].range;
+      l.textContent = fmt(first); h.textContent = fmt(last);
     }
     panel.addEventListener("input", (e) => {
       const k = e.target.dataset.k;
@@ -446,7 +462,7 @@ JS_LIB = r"""
       const v = e.target.type === "checkbox" ? e.target.checked : Number(e.target.value);
       state[k] = v;
       if (k === "frame") state.phase = Math.cos((2 * Math.PI * v) / frames);
-      if (k === "color") { [state.rangeMin, state.rangeMax] = data.colors[v].range; }
+      if (k === "color") { [state.rangeMin, state.rangeMax] = colorRange(data.colors[v]); }
       if (k === "rangeMin" && v > state.rangeMax) state.rangeMax = v;
       if (k === "rangeMax" && v < state.rangeMin) state.rangeMin = v;
       syncRange();
@@ -504,16 +520,21 @@ JS_LIB = r"""
         }
         const state = {
           color: 0, warp: 0, warpFactor: 1, opacity: 1, clip: false, clipAxis: 0, clipAt: 0.5,
-          clipFlip: false, range: false, rangeMin: data.colors[0].range[0], rangeMax: data.colors[0].range[1],
+          clipFlip: false, range: false, rangeMin: colorRange(data.colors[0])[0], rangeMax: colorRange(data.colors[0])[1],
           showContours: false, contours: 10, showEdges: false, showSpider: false, showNodes: false,
           frame: 0, playing: false, phase: 1, ...data.initial,
         };
-        [state.rangeMin, state.rangeMax] = data.colors[state.color].range;
+        [state.rangeMin, state.rangeMax] = colorRange(data.colors[state.color]);
         let busy = false, pending = false;
         async function update() {
           if (busy) { pending = true; return; }
           busy = true;
           try { await pipe.apply(state); await renderWindow.render(); }
+          catch (err) {  // report it once, and stop the animation instead of failing at every step
+            console.error(err);
+            pending = false;
+            stopPlaying();
+          }
           finally { busy = false; }
           if (pending) { pending = false; update(); }
         }
@@ -540,6 +561,11 @@ JS_LIB = r"""
           setStep(state.frame + steps);
           update().finally(() => { raf = requestAnimationFrame(tick); });
         }
+        function stopPlaying() {
+          state.playing = false;
+          playButton.textContent = "▶";
+          playButton.setAttribute("aria-label", "Play");
+        }
         playButton.addEventListener("click", () => {
           state.playing = !state.playing;
           playButton.textContent = state.playing ? "⏸" : "▶";
@@ -555,7 +581,9 @@ JS_LIB = r"""
         await interactor.start();
       } catch (err) {
         console.error(err);
-        poster.innerHTML = `<small>The interactive view could not start: ${err.message}</small>`;
+        const message = document.createElement("small");
+        message.textContent = "The interactive view could not start: " + err.message;
+        poster.replaceChildren(message);
       }
     };
     poster.querySelector("button").addEventListener("click", start);

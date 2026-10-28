@@ -25,6 +25,7 @@
 #  We start by importing the relevant libraries
 
 # +
+import warnings
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -190,11 +191,13 @@ M = dolfinx_mpc.assemble_matrix(fem.form(mass), mpcs, diagval=1e-14, kind="mpi")
 #
 # - The constrained degrees of freedom stay in the matrices, as rows with the diagonal value `diagval`: 1 in $K$ and
 #   $10^{-14}$ in $M$. That gives them the eigenvalue $10^{14}$, far from the ones we look for, so they never show up among the modes.
-# - The mass matrix has no entries for the spiders, as they carry no mass, so the problem is solved with shift-and-invert around a target
-#   rather than directly. The target is negative, so that $K - \sigma M$ is well defined also for the modes with $\lambda \approx 0$,
+# - The mass form is only defined on the solid, so the spiders have no mass of their own. The constraints move the mass of the solid
+#   dofs they tie to the spider that is their master, as for the pads of the feet, but the mass matrix is still singular for the
+#   spiders that are only dependent. The problem is therefore solved with shift-and-invert around a target, rather than directly.
+#   The target is negative, so that $K - \sigma M$ is well defined also for the modes with $\lambda \approx 0$,
 #   and the modes closest to it, the lowest ones, are found first.
-# - `N_MODES` modes are requested, and the loop further down reads exactly that many pairs, so it assumes that they all converge.
-#   {py:meth}`getConverged<slepc4py.SLEPc.EPS.getConverged>` tells how many did, and is worth checking when the model is changed.
+# - `N_MODES` modes are requested, but the solver may find fewer. {py:meth}`getConverged<slepc4py.SLEPc.EPS.getConverged>` tells
+#   how many converged, and only those are read below.
 
 eigensolver = SLEPc.EPS().create(comm)
 eigensolver.setOperators(K, M)
@@ -234,13 +237,30 @@ for point, tag, block, index in spiders:
         line_cells.append([first, n])
 
 functions = [fem.Function(m.function_space) for m in mpcs]
+
 # The eigenvectors are stored in a vector made by DOLFINx for the four function spaces. It is ghosted, with the owned
 # dofs of the four spaces one after the other on each process, which is the layout of K, followed by their ghost values.
-# That is the layout that {py:func}`dolfinx.fem.petsc.assign` copies to and from, which the vector of the matrix
-# (`K.createVecRight()`) does not have, as it holds the owned dofs only.
-x = dolfinx.fem.petsc.create_vector([m.function_space for m in mpcs])
+# {py:func}`dolfinx.fem.petsc.assign` copies between a vector of this layout and the four functions. The blocks of K
+# follow the order of the list `mpcs` that it was assembled with, so the spaces are taken from that list too.
+
+# +
+spaces = [m.function_space for m in mpcs]
+x = dolfinx.fem.petsc.create_vector(
+    spaces, kind="mpi"
+)  # the kind of K and M, assembled above
+# The sizes at least are those of K
+assert x.getSizes() == K.getSizes()[0], (
+    f"The vector {x.getSizes()} does not have the layout of K {K.getSizes()[0]}"
+)
+
+n_modes = min(N_MODES, eigensolver.getConverged())
+if n_modes < N_MODES:
+    warnings.warn(f"Only {n_modes} of the {N_MODES} requested modes converged")
+assert n_modes > 0, "No modes converged"
+# -
+
 modes, line_modes, frequencies = [], {}, []
-for i in range(N_MODES):
+for i in range(n_modes):
     eigenvalue = eigensolver.getEigenpair(i, x).real
     # The solver only sets the owned entries: get the ghost values from their owners, and copy the
     # entries of the four spaces to the four functions. The constrained dofs are part of x too, but get
@@ -282,7 +302,7 @@ if comm.rank == 0:
     # create_mesh reorders points and cells: find the dof of each of the original points
     line_dof = np.empty(len(line_points), dtype=np.int32)
     line_dof[line_mesh.geometry.input_global_indices[line_mesh.geometry.dofmap]] = (
-        W_lines.dofmap.list
+        W_lines.dofmaps[0].list
     )
 
     def line_function(name, values):
@@ -310,7 +330,7 @@ if comm.rank == 0:
 # steps, to a file of their own, and the writer of that file only exists on process 0. The `ExitStack` closes whichever writers
 # were opened, also if the loop fails.
 
-ANIMATE_MODE = 2  # mode number to animate
+ANIMATE_MODE = min(2, len(modes) - 1)  # mode number to animate
 u_t = fem.Function(V, name="u")
 with ExitStack() as stack:  # the spider lines are written by process 0 only
     writer = stack.enter_context(VTXWriter(comm, "results/animation/spider.bp", [u_t]))

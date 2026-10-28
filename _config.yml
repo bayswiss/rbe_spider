@@ -5,9 +5,10 @@ title: "RBE Spiders in DOLFINx_MPC"
 author: "Jørgen S. Dokken and Antonio Baiano Svizzero"
 copyright: "2026"
 
-# The cache keys on the page only, so clear `_build/.jupyter_cache` after editing vtkwasm.py.
+# The pages are always run: the cache keys on the page only, so it would keep the old viewer from vtkwasm.py after that
+# is edited. Use `cache` when only the prose of the page changes, and clear `_build/.jupyter_cache` after other edits.
 execute:
-  execute_notebooks: cache
+  execute_notebooks: force
   # Seconds each cell of a demo may run for: the spider assembles and solves in one cell,
   # which is slow on a busy runner
   timeout: 600

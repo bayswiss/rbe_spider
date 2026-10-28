@@ -62,7 +62,9 @@ jobs:
         run: python3 -m pip install -r requirements-docs.txt
 
       - name: Build docs
-        run: jupyter-book build . -W --keep-going
+        # No -W here: older tags are built with their own configuration, and a warning in one of them (or a slow
+        # intersphinx server) should not drop that version from the site. The pull request check uses -W.
+        run: jupyter-book build .
 
       # A tarball keeps hidden files and permissions, and is what gets archived
       - name: Package HTML
