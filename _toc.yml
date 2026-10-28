@@ -1,0 +1,5 @@
+format: jb-book
+root: index
+chapters:
+- file: spider_modes.py
+- file: vtkwasm.md
