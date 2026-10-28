@@ -12,7 +12,7 @@ execute:
   timeout: 600
 
 only_build_toc_files: true
-exclude_patterns: [.github/*, .github/**, results/**, vtkwasm.py, test_wasm.py]
+exclude_patterns: [.github/*, .github/**, results/**, vtkwasm.py]
 
 # Information about where the book exists on the web
 repository:

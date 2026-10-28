@@ -41,6 +41,7 @@ def scene_data(
     subdivision: int = 2,
     initial: dict | None = None,
     spider: pv.PolyData | None = None,
+    frames: int = 40,
 ) -> dict:
     """Pack `grid` for `vtkwasm_view`.
 
@@ -51,6 +52,8 @@ def scene_data(
     `spider` is an optional set of line cells, such as the connections of a
     multi-point constraint. It is shown with its nodes, and moves with the
     point arrays of `grid` that it has too; the others count as zero there.
+
+    A mode is played as cos(2 pi step / `frames`) times its displacement, in `frames` steps.
     """
     surface = grid.extract_surface(
         nonlinear_subdivision=subdivision, algorithm="dataset_surface"
@@ -158,6 +161,7 @@ def scene_data(
             "point_data": {k: _pack(x, np.float32) for k, x in padded.items()},
         }
     return {
+        "frames": frames,
         "spider": spider_part,
         "initial": start,
         "bounds": list(map(float, grid.bounds)),
@@ -377,20 +381,26 @@ JS_LIB = r"""
   }
  
   function controls(data, state, onChange) {
+    const frames = data.frames || 40;
     const opts = (list) => list.map((o, i) => `<option value="${i}">${o.label}</option>`).join("");
     const panel = document.createElement("div");
     panel.className = "vwd-controls";
     panel.innerHTML = `
+      <div class="vwd-steps">
+        <button type="button" data-a="play" aria-label="Play">▶</button>
+        <input type="range" data-k="frame" min="0" max="${frames - 1}" step="1" value="0" aria-label="Step">
+        <output data-o="step"></output>
+        <output data-o="anim"></output>
+      </div>
       <label>Colour by <select data-k="color">${opts(data.colors)}</select></label>
       <label>Warp <select data-k="warp">${opts(data.warps)}</select></label>
       <label>Warp scale <input type="range" data-k="warpFactor" min="0" max="4" step="0.05" value="1"> <output data-o="warpFactor"></output></label>
-      <label><input type="checkbox" data-k="animate"> Animate <output data-o="anim"></output></label>
       <label>Opacity <input type="range" data-k="opacity" min="0.1" max="1" step="0.05" value="1"></label>
       <fieldset><legend><label><input type="checkbox" data-k="clip"> Clip</label></legend>
         <select data-k="clipAxis"><option value="0">x</option><option value="1">y</option><option value="2">z</option></select>
         <input type="range" data-k="clipAt" min="0" max="1" step="0.01" value="0.5">
         <label><input type="checkbox" data-k="clipFlip"> Flip</label></fieldset>
-      <fieldset><legend><label><input type="checkbox" data-k="range"> Value range</label></legend>
+      <fieldset><legend><label><input type="checkbox" data-k="range"> Threshold</label></legend>
         <input type="range" data-k="rangeMin" step="any"> <input type="range" data-k="rangeMax" step="any">
         <output data-o="range"></output></fieldset>
       <fieldset><legend><label><input type="checkbox" data-k="showContours"> Contours</label></legend>
@@ -407,8 +417,11 @@ JS_LIB = r"""
     const fmt = (v) => Number(v).toPrecision(3);
     function readout() {
       panel.querySelector("[data-o=warpFactor]").textContent = "×" + state.warpFactor.toFixed(2);
-      panel.querySelector("[data-o=anim]").textContent = !state.animate ? ""
-        : `${data.warps[state.warp].label} · cos(2πt/T) = ${(state.phase >= 0 ? '+' : '') + state.phase.toFixed(2)}, T = 3 s`;
+      const phase = Math.abs(state.phase) < 0.005 ? 0 : state.phase;  // not "-0.00"
+      panel.querySelector("[data-o=step]").textContent = `step ${state.frame} / ${frames - 1}`;
+      panel.querySelector("[data-o=anim]").textContent = state.warp === 0
+        ? "Choose a warp to see the motion"
+        : `${data.warps[state.warp].label} · cos(2π·${state.frame}/${frames}) = ${(phase >= 0 ? "+" : "") + phase.toFixed(2)}`;
     }
     function syncRange() {
       const [lo, hi] = data.colors[state.color].range;
@@ -429,6 +442,7 @@ JS_LIB = r"""
       if (!k) return;
       const v = e.target.type === "checkbox" ? e.target.checked : Number(e.target.value);
       state[k] = v;
+      if (k === "frame") state.phase = Math.cos((2 * Math.PI * v) / frames);
       if (k === "color") { [state.rangeMin, state.rangeMax] = data.colors[v].range; }
       if (k === "rangeMin" && v > state.rangeMax) state.rangeMax = v;
       if (k === "rangeMax" && v < state.rangeMin) state.rangeMin = v;
@@ -489,7 +503,7 @@ JS_LIB = r"""
           color: 0, warp: 0, warpFactor: 1, opacity: 1, clip: false, clipAxis: 0, clipAt: 0.5,
           clipFlip: false, range: false, rangeMin: data.colors[0].range[0], rangeMax: data.colors[0].range[1],
           showContours: false, contours: 10, showEdges: false, showSpider: false, showNodes: false,
-          animate: false, phase: 1, ...data.initial,
+          frame: 0, playing: false, phase: 1, ...data.initial,
         };
         [state.rangeMin, state.rangeMax] = data.colors[state.color].range;
         let busy = false, pending = false;
@@ -500,19 +514,36 @@ JS_LIB = r"""
           finally { busy = false; }
           if (pending) { pending = false; update(); }
         }
-        let running = false;
-        function tick(t) {
-          if (!state.animate) { running = false; state.phase = 1; update(); return; }
-          state.phase = Math.cos((2 * Math.PI * t) / 3000);
-          readout();
-          update().finally(() => requestAnimationFrame(tick));
-        }
-        function changed() {
-          if (state.animate && !running) { running = true; requestAnimationFrame(tick); }
-          else if (!state.animate) update();
-        }
-        const { panel, legend, readout } = controls(data, state, changed);
+        const { panel, legend, readout } = controls(data, state, update);
         panel.querySelector("[data-a=reset]").addEventListener("click", async () => { await resetView(); update(); });
+        // Play and pause, like the VCR controls of ParaView: the step runs at a fixed rate and loops
+        const frames = data.frames || 40, fps = 15;
+        const playButton = panel.querySelector("[data-a=play]");
+        const slider = panel.querySelector("[data-k=frame]");
+        let raf = 0, last = 0, elapsed = 0;
+        function setStep(step) {
+          state.frame = ((step % frames) + frames) % frames;
+          state.phase = Math.cos((2 * Math.PI * state.frame) / frames);
+          slider.value = state.frame;
+          readout();
+        }
+        function tick(t) {
+          if (!state.playing) { raf = 0; return; }
+          elapsed += last ? t - last : 0;
+          last = t;
+          const steps = Math.floor((elapsed * fps) / 1000);
+          if (steps === 0) { raf = requestAnimationFrame(tick); return; }
+          elapsed -= (steps * 1000) / fps;
+          setStep(state.frame + steps);
+          update().finally(() => { raf = requestAnimationFrame(tick); });
+        }
+        playButton.addEventListener("click", () => {
+          state.playing = !state.playing;
+          playButton.textContent = state.playing ? "⏸" : "▶";
+          playButton.setAttribute("aria-label", state.playing ? "Pause" : "Play");
+          last = 0; elapsed = 0;
+          if (state.playing && !raf) raf = requestAnimationFrame(tick);
+        });
         view.after(legend, panel);
         await pipe.apply(state);
         await resetView();
@@ -565,7 +596,11 @@ CSS = """
 .vwd-controls input[type=number] { width: 4.5rem; }
 .vwd-controls select, .vwd-controls input { font: inherit; }
 .vwd-controls output { font-variant-numeric: tabular-nums; }
-.vwd-controls output[data-o=anim] { flex-basis: 100%; white-space: nowrap; }
+.vwd-steps { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; }
+.vwd-steps button { min-width: 2.4rem; }
+.vwd-steps input[type=range] { flex: 1; min-width: 8rem; }
+.vwd-steps output { white-space: nowrap; }
+.vwd-steps output[data-o=anim] { flex-basis: 100%; }
 """
 
 
