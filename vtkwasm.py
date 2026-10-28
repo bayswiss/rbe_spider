@@ -201,7 +201,8 @@ JS_LIB = r"""
       document.head.appendChild(s);
     });
   }
-  // Download the bundle and check its hash, which needs a secure context (https, localhost, file)
+  // Download the bundle and check its hash. That needs a secure context (https, localhost, file): on a page
+  // served over plain http the bundle is loaded unchecked, from the same pinned commit.
   async function verifiedBundle() {
     if (!window.crypto?.subtle) return BUNDLE;
     const response = await fetch(BUNDLE);
@@ -326,6 +327,8 @@ JS_LIB = r"""
  
     async function apply(s) {
       const w = data.warps[s.warp];
+      // "F" in the expression is a placeholder for the scale of the warp: the scale from the data, times the slider,
+      // times the phase of the animation. The expressions are made in scene_data, which has no other capital F.
       const fn = w.expr.replace("F", String(w.scale * s.warpFactor * s.phase));
       await warp.setFunction(fn); await edgeWarp.setFunction(fn);
       if (spiderWarp) {

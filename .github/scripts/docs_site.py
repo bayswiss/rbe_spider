@@ -62,7 +62,12 @@ def matrix(args: argparse.Namespace) -> None:
 
 
 def write_redirects(site: Path) -> None:
-    """Keep pre-versioning URLs working: ``<page>.html`` -> ``main/<page>.html``."""
+    """Keep pre-versioning URLs working: ``<page>.html`` -> ``main/<page>.html``.
+
+    There is a stub for each page of ``main`` in the build, and none for a page that has since been
+    removed, which then is a 404. Files that are already in the site, such as ``switcher.json``,
+    are left alone.
+    """
     for page in (site / "main").rglob("*.html"):
         rel = page.relative_to(site / "main")
         stub = site / rel

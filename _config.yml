@@ -5,6 +5,7 @@ title: "RBE Spiders in DOLFINx_MPC"
 author: "Jørgen S. Dokken and Antonio Baiano Svizzero"
 copyright: "2026"
 
+# The cache keys on the page only, so clear `_build/.jupyter_cache` after editing vtkwasm.py.
 execute:
   execute_notebooks: cache
   # Seconds each cell of a demo may run for: the spider assembles and solves in one cell,
@@ -50,6 +51,8 @@ sphinx:
 
 
   config:
+    # A cell that fails fails the build, instead of putting the error in the page
+    nb_execution_raise_on_error: true
     html_theme_options:
       navigation_with_keys: false
       # pydata-sphinx-theme puts a search button in a top navbar unless this is
@@ -83,3 +86,4 @@ sphinx:
       packaging: ["https://packaging.pypa.io/en/stable/", null]
       matplotlib: ["https://matplotlib.org/stable/", null]
       slepc4py: ["https://slepc.upv.es/release/slepc4py/", null]
+      myst_nb: ["https://myst-nb.readthedocs.io/en/latest/", null]

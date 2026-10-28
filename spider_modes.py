@@ -29,9 +29,11 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from mpi4py import MPI
+from petsc4py import PETSc
 from slepc4py import SLEPc
 
 import basix.ufl
+import dolfinx.fem.petsc
 import dolfinx_mpc
 import numpy as np
 import ufl
@@ -96,7 +98,7 @@ for k in range(8):
 # -
 
 # We define the function space for all the components, and separate nodal meshes for each of the spiders, that will be
-# used to connect the various parts of `domain`.0
+# used to connect the various parts of `domain`.
 
 V = fem.functionspace(domain, ("Lagrange", DEGREE, (3,)))
 spider = basix.ufl.element("DG", "point", 0, shape=(6,))  # translation and rotation
@@ -183,7 +185,16 @@ K = dolfinx_mpc.assemble_matrix(
 )
 M = dolfinx_mpc.assemble_matrix(fem.form(mass), mpcs, diagval=1e-14, kind="mpi")
 
-# The eigenvalue problem is solved with {py:class}`slepc4py.SLEPc.EPS`
+# The eigenvalue problem $K x = \lambda M x$, with $\lambda = \omega^2$, is solved with {py:class}`slepc4py.SLEPc.EPS`.
+# A few things are subtle here:
+#
+# - The constrained degrees of freedom stay in the matrices, as rows with the diagonal value `diagval`: 1 in $K$ and
+#   $10^{-14}$ in $M$. That gives them the eigenvalue $10^{14}$, far from the ones we look for, so they never show up among the modes.
+# - The mass matrix has no entries for the spiders, as they carry no mass, so the problem is solved with shift-and-invert around a target
+#   rather than directly. The target is negative, so that $K - \sigma M$ is well defined also for the modes with $\lambda \approx 0$,
+#   and the modes closest to it, the lowest ones, are found first.
+# - `N_MODES` modes are requested, and the loop further down reads exactly that many pairs, so it assumes that they all converge.
+#   {py:meth}`getConverged<slepc4py.SLEPc.EPS.getConverged>` tells how many did, and is worth checking when the model is changed.
 
 eigensolver = SLEPc.EPS().create(comm)
 eigensolver.setOperators(K, M)
@@ -223,18 +234,23 @@ for point, tag, block, index in spiders:
         line_cells.append([first, n])
 
 functions = [fem.Function(m.function_space) for m in mpcs]
-x = K.createVecRight()
+# The eigenvectors are stored in a vector made by DOLFINx for the four function spaces. It is ghosted, with the owned
+# dofs of the four spaces one after the other on each process, which is the layout of K, followed by their ghost values.
+# That is the layout that {py:func}`dolfinx.fem.petsc.assign` copies to and from, which the vector of the matrix
+# (`K.createVecRight()`) does not have, as it holds the owned dofs only.
+x = dolfinx.fem.petsc.create_vector([m.function_space for m in mpcs])
 modes, line_modes, frequencies = [], {}, []
 for i in range(N_MODES):
     eigenvalue = eigensolver.getEigenpair(i, x).real
-    start = 0
-    for f in functions:  # x holds the dofs of the 4 blocks one after the other
-        n = f.x.index_map.size_local * f.x.block_size
-        f.x.array[:n] = x.array_r[start : start + n]
-        f.x.scatter_forward()
-        start += n
+    # The solver only sets the owned entries: get the ghost values from their owners, and copy the
+    # entries of the four spaces to the four functions. The constrained dofs are part of x too, but get
+    # no value from the solver: backsubstitution below computes them from the dofs they are tied to.
+    x.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
+    dolfinx.fem.petsc.assign(x, functions)
     for m in mpcs:
         m.backsubstitution(functions)
+    # The eigenvalue is omega^2. It can be a tiny negative number from round-off for a mode that costs no energy,
+    # such as the hinge modes below, so it is clipped at 0 before the square root.
     frequencies.append(np.sqrt(max(eigenvalue, 0)) / (2 * np.pi))
     if comm.rank == 0:
         print(f"mode {i}: {frequencies[-1]:.2f} Hz")
@@ -242,9 +258,9 @@ for i in range(N_MODES):
     mode = fem.Function(V, name=f"u_{i}")
     mode.x.array[: 3 * owned] = functions[0].x.array[: 3 * owned]
     mode.x.scatter_forward()
-    scale = 10 / comm.allreduce(
-        np.abs(mode.x.array).max(), op=MPI.MAX
-    )  # largest displacement: 10 mm
+    # An eigenvector has no natural size, nor sign: scale it so that the largest displacement is 10 mm,
+    # which is only for display. The spiders are scaled by the same factor to stay consistent with the solid.
+    scale = 10 / comm.allreduce(np.abs(mode.x.array).max(), op=MPI.MAX)
     mode.x.array[:] *= scale
     modes.append(mode)
     values = []
@@ -275,6 +291,9 @@ if comm.rank == 0:
         return f
 # -
 
+# The modes of the solid are written as one file, with each mode as a function of its own at a single time.
+# The spider lines are written by process 0 only, on a mesh that lives on that process alone.
+
 Path("results/animation").mkdir(parents=True, exist_ok=True)
 with VTXWriter(comm, "results/spider_modes.bp", modes) as writer:
     writer.write(0.0)
@@ -285,6 +304,11 @@ if comm.rank == 0:
         [line_function(k, v) for k, v in line_modes.items()],
     ) as writer:
         writer.write(0.0)
+
+# A mode is a standing wave, $u(t) = \cos(\omega t) \phi$. To animate it in ParaView we write one period in 40 steps,
+# each the mode multiplied by $\cos(2 \pi k / 40)$, with the step number as the time. The spider lines are written in the same
+# steps, to a file of their own, and the writer of that file only exists on process 0. The `ExitStack` closes whichever writers
+# were opened, also if the loop fails.
 
 ANIMATE_MODE = 2  # mode number to animate
 u_t = fem.Function(V, name="u")
@@ -308,9 +332,11 @@ with ExitStack() as stack:  # the spider lines are written by process 0 only
 # %% [markdown]
 # ### Interactive mode shapes
 # The modes can be explored in the browser, through [VTK.wasm](https://docs.vtk.org/en/latest/getting_started/using_webassembly.html).
-# Choose a mode under *Warp*, tick *Animate* to oscillate it, and use *Clip* to look inside.
-# The first three modes are rigid-body motions on the soft ground springs, so the view
-# opens on the first flexible mode.
+# Choose a mode under *Warp*, press play, or move the step slider, to oscillate it, and use *Clip* to look inside.
+# The first three modes are the pins turning: the hinge stiffness `K_HINGE` is 1, so the hinges are
+# almost free and these modes cost almost no energy, at about 0.1 Hz. With `K_HINGE = 1e6` they
+# move to 61 to 74 Hz, while softening the ground springs does not change them. The view opens
+# on the first mode above 1 Hz, which depends on `K_HINGE`.
 #
 # The view is built in five steps: a grid of the solid with the modes attached,
 # the pieces of that grid from all processes joined into one, the spider as lines and points,
@@ -361,6 +387,7 @@ if root:
 
 # %% [markdown]
 # #### The spider
+# (`spider` above is the element of the spider meshes, so the grid of lines gets another name.)
 # The spiders are the lines that join each pin centre or foot centre to the nodes of its
 # surface. They were collected as `line_points` and `line_cells` above, and are made into a
 # {py:class}`pyvista.PolyData` of line cells. Each mode is attached at their points too, as
@@ -368,12 +395,12 @@ if root:
 
 # + tags=["hide-input"]
 if root:
-    spider = pv.PolyData(
+    spider_lines = pv.PolyData(
         np.array(line_points),
         lines=np.column_stack([np.full(len(line_cells), 2), line_cells]).ravel(),
     )
     for i, name in enumerate(names):
-        spider.point_data[name] = line_modes[f"u_{i}"]
+        spider_lines.point_data[name] = line_modes[f"u_{i}"]
 # -
 
 # %% [markdown]
@@ -388,14 +415,14 @@ if root:
 # `initial` chooses what the view starts with: the first flexible mode, a slightly transparent
 # solid, and the spider shown.
 
-# %%
+# +
 if root:
     first = next(
         (i for i, f in enumerate(frequencies) if f > 1.0), 0
-    )  # skip rigid-body modes
+    )  # skip the hinge modes
     scene = scene_data(
         merged,
-        spider=spider,
+        spider=spider_lines,
         subdivision=DEGREE - 1,  # nothing to split for linear cells
         initial={
             "color": f"|{names[first]}|",
@@ -405,6 +432,7 @@ if root:
             "showNodes": True,
         },
     )
+# -
 
 # %% [markdown]
 # #### The view
@@ -413,10 +441,11 @@ if root:
 # warp, the clip along a plane, the threshold and the contours. With `autoload=True` this starts
 # when the view scrolls into sight, and without it when the reader presses a button.
 
-# %%
+# +
 if root:
     view = vtkwasm_view(scene, autoload=True)
     display(view)
+# -
 
 # %% [markdown]
 # #### Sharing the view with the front page

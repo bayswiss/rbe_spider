@@ -62,7 +62,7 @@ jobs:
         run: python3 -m pip install -r requirements-docs.txt
 
       - name: Build docs
-        run: jupyter-book build .
+        run: jupyter-book build . -W --keep-going
 
       # A tarball keeps hidden files and permissions, and is what gets archived
       - name: Package HTML
