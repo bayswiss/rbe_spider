@@ -62,9 +62,9 @@ jobs:
         run: python3 -m pip install -r requirements-docs.txt
 
       - name: Build docs
-        # No -W here: older tags are built with their own configuration, and a warning in one of them (or a slow
-        # intersphinx server) should not drop that version from the site. The pull request check uses -W.
-        run: jupyter-book build .
+        # Warnings fail the build of main, so that a bad merge is not published: the site keeps the last good build.
+        # Older tags are built with their own configuration, so they are built as they are.
+        run: jupyter-book build . ${{ matrix.git_ref == 'main' && '-W --keep-going' || '' }}
 
       # A tarball keeps hidden files and permissions, and is what gets archived
       - name: Package HTML

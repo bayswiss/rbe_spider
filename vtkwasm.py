@@ -404,6 +404,7 @@ JS_LIB = r"""
     const panel = document.createElement("div");
     panel.className = "vwd-controls";
     panel.innerHTML = `
+      <div class="vwd-error" role="alert" hidden></div>
       <div class="vwd-steps">
         <button type="button" data-a="play" aria-label="Play">▶</button>
         <input type="range" data-k="frame" min="0" max="${frames - 1}" step="1" value="0" aria-label="Step">
@@ -525,20 +526,24 @@ JS_LIB = r"""
           frame: 0, playing: false, phase: 1, ...data.initial,
         };
         [state.rangeMin, state.rangeMax] = colorRange(data.colors[state.color]);
-        let busy = false, pending = false;
+        let busy = false, pending = false, errorBox = null;
         async function update() {
           if (busy) { pending = true; return; }
           busy = true;
-          try { await pipe.apply(state); await renderWindow.render(); }
-          catch (err) {  // report it once, and stop the animation instead of failing at every step
+          try {
+            await pipe.apply(state); await renderWindow.render();
+            if (errorBox) errorBox.hidden = true;
+          } catch (err) {  // say so in the view, and stop the animation instead of failing at every step
             console.error(err);
             pending = false;
             stopPlaying();
+            if (errorBox) { errorBox.textContent = "The view could not be updated: " + err.message; errorBox.hidden = false; }
           }
           finally { busy = false; }
           if (pending) { pending = false; update(); }
         }
         const { panel, legend, readout } = controls(data, state, update);
+        errorBox = panel.querySelector(".vwd-error");
         panel.querySelector("[data-a=reset]").addEventListener("click", async () => { await resetView(); update(); });
         // Play and pause, like the VCR controls of ParaView: the step runs at a fixed rate and loops
         const frames = data.frames || 40, fps = 15;
@@ -627,6 +632,8 @@ CSS = """
 .vwd-controls input[type=number] { width: 4.5rem; }
 .vwd-controls select, .vwd-controls input { font: inherit; }
 .vwd-controls output { font-variant-numeric: tabular-nums; }
+.vwd-error { grid-column: 1 / -1; color: var(--pst-color-danger, #b00020); }
+.vwd-error[hidden] { display: none; }
 .vwd-steps { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; }
 .vwd-steps button { min-width: 2.4rem; }
 .vwd-steps input[type=range] { flex: 1; min-width: 8rem; }

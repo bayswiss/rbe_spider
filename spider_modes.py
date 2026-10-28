@@ -248,16 +248,15 @@ spaces = [m.function_space for m in mpcs]
 x = dolfinx.fem.petsc.create_vector(
     spaces, kind="mpi"
 )  # the kind of K and M, assembled above
-# The sizes at least are those of K
-assert x.getSizes() == K.getSizes()[0], (
-    f"The vector {x.getSizes()} does not have the layout of K {K.getSizes()[0]}"
+# The global size at least is that of K. It is the same on all processes, so that they stop together.
+assert x.getSize() == K.getSize()[0], (
+    f"The vector of size {x.getSize()} does not have the layout of K, of size {K.getSize()[0]}"
 )
 
 n_modes = min(N_MODES, eigensolver.getConverged())
 if n_modes < N_MODES:
     warnings.warn(f"Only {n_modes} of the {N_MODES} requested modes converged")
 assert n_modes > 0, "No modes converged"
-# -
 
 modes, line_modes, frequencies = [], {}, []
 for i in range(n_modes):
@@ -288,6 +287,7 @@ for i in range(n_modes):
         values.append(scale * dolfinx_mpc.spider_values(functions[block], index)[:3])
         values.extend(np.vstack(comm.allgather(mode.x.array.reshape(-1, 3)[dofs])))
     line_modes[mode.name] = np.array(values)
+# -
 
 # The spider lines as a mesh of line cells on a single process (the points are the same on all)
 if comm.rank == 0:
@@ -330,7 +330,11 @@ if comm.rank == 0:
 # steps, to a file of their own, and the writer of that file only exists on process 0. The `ExitStack` closes whichever writers
 # were opened, also if the loop fails.
 
-ANIMATE_MODE = min(2, len(modes) - 1)  # mode number to animate
+ANIMATE_MODE = 2  # mode number to animate
+if ANIMATE_MODE >= len(modes):
+    raise ValueError(
+        f"Cannot animate mode {ANIMATE_MODE}: only {len(modes)} modes were computed"
+    )
 u_t = fem.Function(V, name="u")
 with ExitStack() as stack:  # the spider lines are written by process 0 only
     writer = stack.enter_context(VTXWriter(comm, "results/animation/spider.bp", [u_t]))
@@ -369,7 +373,7 @@ with ExitStack() as stack:  # the spider lines are written by process 0 only
 # the cells are quadratic tetrahedra with the same straight edges, and values at the midpoints. Each mode is attached as point data, one 3-component array
 # per mode, named by its number and frequency so that the viewer can offer it in its menus.
 
-# %%
+# +
 import pyvista as pv
 from dolfinx import plot
 from IPython.display import HTML, display
@@ -382,8 +386,8 @@ for name, mode in zip(names, modes):
     grid.point_data[name] = mode.x.array.reshape(
         -1, 3
     )  # all local dofs, as vtk_mesh(V) has
+# -
 
-# %% [markdown]
 # #### Joining the pieces of the grid
 # When the program runs on several processes, each one only has the cells it owns.
 # The grids are gathered on process 0, which merges them into a single grid, so that the

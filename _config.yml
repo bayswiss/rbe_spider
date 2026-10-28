@@ -9,9 +9,8 @@ copyright: "2026"
 # is edited. Use `cache` when only the prose of the page changes, and clear `_build/.jupyter_cache` after other edits.
 execute:
   execute_notebooks: force
-  # Seconds each cell of a demo may run for: the spider assembles and solves in one cell,
-  # which is slow on a busy runner
-  timeout: 600
+  # Seconds each cell of a demo may run for
+  timeout: 30
 
 only_build_toc_files: true
 exclude_patterns: [.github/*, .github/**, results/**, vtkwasm.py]
