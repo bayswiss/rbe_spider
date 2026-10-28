@@ -1,0 +1,85 @@
+# Book settings
+# Learn more at https://jupyterbook.org/customize/config.html
+
+title: "RBE Spiders in DOLFINx_MPC"
+author: "Jørgen S. Dokken and Antonio Baiano Svizzero"
+copyright: "2026"
+
+execute:
+  execute_notebooks: cache
+  # Seconds each cell of a demo may run for: the spider assembles and solves in one cell,
+  # which is slow on a busy runner
+  timeout: 600
+
+only_build_toc_files: true
+exclude_patterns: [.github/*, .github/**, results/**, vtkwasm.py, test_wasm.py]
+
+# Information about where the book exists on the web
+repository:
+  url: https://github.com/bayswiss/rbe_spider # Online location of your book
+  path_to_book: . # Optional path to your book, relative to the repository root
+  branch: main  # Which branch of the repository should be used when creating links (optional)
+
+# bibtex_bibfiles:
+#   - references.bib
+
+launch_buttons:
+  notebook_interface: "jupyterlab" # The interface interactive links will activate ["classic", "jupyterlab"]
+  binderhub_url: "https://mybinder.org"
+
+html:
+  use_issues_button: true
+  use_repository_button: true
+  
+
+parse:
+  myst_enable_extensions:
+    - amsmath
+    - dollarmath
+    - linkify
+    - html_admonition
+    - html_image
+
+sphinx:
+  extra_extensions:
+  - 'sphinx.ext.autodoc'
+  - 'sphinx.ext.napoleon'
+  - 'sphinx.ext.viewcode'
+  - 'sphinx.ext.intersphinx'
+  - sphinx_codeautolink
+
+
+  config:
+    html_theme_options:
+      navigation_with_keys: false
+      # pydata-sphinx-theme puts a search button in a top navbar unless this is
+      # set; sphinx-book-theme >= 1.3 no longer hides it, giving two search bars
+      navbar_persistent: []
+      # Setting html_theme_options here replaces the ones Jupyter Book builds from the
+      # settings above, so the buttons are repeated for the theme
+      repository_url: https://github.com/bayswiss/rbe_spider
+      repository_branch: main
+      use_repository_button: true
+      use_issues_button: true
+      launch_buttons:
+        notebook_interface: jupyterlab
+        binderhub_url: https://mybinder.org
+    nb_custom_formats:
+      .py:
+        - jupytext.reads
+        - fmt: py
+
+    codeautolink_concat_default: True
+    intersphinx_mapping:
+      dolfinx_mpc: ["https://jorgensd.github.io/dolfinx_mpc/main/", null]
+      basix: ["https://docs.fenicsproject.org/basix/main/python/", null]
+      ffcx: ["https://docs.fenicsproject.org/ffcx/main/", null]
+      ufl: ["https://docs.fenicsproject.org/ufl/main/", null]
+      dolfinx: ["https://docs.fenicsproject.org/dolfinx/main/python", null]
+      petsc4py: ["https://petsc.org/release/petsc4py", null]
+      mpi4py: ["https://mpi4py.readthedocs.io/en/stable", null]
+      numpy: ["https://numpy.org/doc/stable/", null]
+      pyvista: ["https://docs.pyvista.org/", null]
+      packaging: ["https://packaging.pypa.io/en/stable/", null]
+      matplotlib: ["https://matplotlib.org/stable/", null]
+      slepc4py: ["https://slepc.upv.es/release/slepc4py/", null]

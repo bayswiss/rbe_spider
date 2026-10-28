@@ -1,0 +1,5 @@
+jupyter-book<2.0
+jupytext
+matplotlib
+pyvista
+sphinx-codeautolink

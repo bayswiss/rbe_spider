@@ -1,0 +1,14 @@
+# .github/docs-versions.yml
+#
+# "main" is always built from the main branch with `main_image`.
+# Tagged releases of this repository can be added below, newest first, and are
+# built once and archived (see .github/workflows/deploy-pages.yml):
+#
+#   versions:
+#     - tag: "v1.0.0"        # git tag of this repository
+#       minor: "v1.0"        # name shown in the version menu
+#       image: "ghcr.io/jorgensd/dolfinx_mpc:v0.12.0"
+
+main_image: "ghcr.io/jorgensd/dolfinx_mpc:v0.12.0.dev1"
+
+versions: []
