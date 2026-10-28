@@ -240,7 +240,7 @@ functions = [fem.Function(m.function_space) for m in mpcs]
 
 # The eigenvectors are stored in a vector made by DOLFINx for the four function spaces. It is ghosted, with the owned
 # dofs of the four spaces one after the other on each process, which is the layout of K, followed by their ghost values.
-# {py:func}`dolfinx.fem.petsc.assign` copies between a vector of this layout and the four functions. The blocks of K
+# dolfinx.fem.petsc.assign copies between a vector of this layout and the four functions. The blocks of K
 # follow the order of the list `mpcs` that it was assembled with, so the spaces are taken from that list too.
 
 # +
@@ -429,7 +429,7 @@ if root:
 
 # %% [markdown]
 # #### Packing the scene
-# {py:func}`vtkwasm.scene_data` turns the grids into what the browser needs: the outer surface of
+# {doc}`vtkwasm.scene_data <vtkwasm>` turns the grids into what the browser needs: the outer surface of
 # the solid, drawn as triangles (`subdivision` splits each triangle of a higher order cell, so
 # that the surface follows the curved displacement), the edges of the surface, the spider, and every point array. They are
 # stored as single precision, compressed and embedded in the page. The value range of each
@@ -460,7 +460,7 @@ if root:
 
 # %% [markdown]
 # #### The view
-# {py:func}`vtkwasm.vtkwasm_view` returns the HTML of the viewer. When it is shown, the browser
+# {doc}`vtkwasm.vtkwasm_view <vtkwasm>` returns the HTML of the viewer. When it is shown, the browser
 # downloads VTK.wasm (about 24 MB, cached afterwards), which runs the filters of the viewer: the
 # warp, the clip along a plane, the threshold and the contours. With `autoload=True` this starts
 # when the view scrolls into sight, and without it when the reader presses a button.
@@ -474,8 +474,9 @@ if root:
 # %% [markdown]
 # #### Sharing the view with the front page
 # The front page of the book shows the same view and the table of frequencies, without running
-# the simulation again. They are stored under a name with {py:func}`myst_nb.glue`, which the
-# front page refers to.
+# the simulation again. They are stored under a name with `myst_nb.glue`, which the front page
+# refers to, see
+# [embedding outputs from other pages](https://myst-nb.readthedocs.io/en/latest/render/glue.html#glue-crossdoc).
 
 # + tags=["hide-input"]
 if root:
